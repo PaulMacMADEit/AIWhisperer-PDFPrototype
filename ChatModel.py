@@ -167,15 +167,12 @@ def main():
         context = "Be very concise."
         completion = Anthropic.remote(prompt, query)
         print("Anthropic: " + query + ": " + " ".join(completion))
-    
-    text = "The property is in NSW, it is 200 acres with rolling hills and a creek. Has a 2 queen bedroom, $165/night, extra toilets, and wifi via starlink"
-    result = extract_with_model(text, "OpenAI-GPT4")
-    
-    table_result = OpenAI.remote(result, use_structured_output=True, output_schema=TableOutput)
-    #print("Table Output: ", table_result)
-
-    # Save the result to a CSV file
-    save_to_csv(table_result)
+        
+        text = "The property is in NSW, it is 200 acres with rolling hills and a creek. Has a 2 queen bedroom, $165/night, extra toilets, and wifi via starlink"
+        results = LLM_Model(text, "OpenAI-GPT4")
+        
+        table_result = OpenAI.remote(results, use_structured_output=True, output_schema=TableOutput)
+        save_to_csv(table_result)
 
 def save_to_csv(table_output: TableOutput, filename: str = "room_info.csv"):
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
