@@ -22,4 +22,5 @@ if __name__ == '__main__':
     text = extract_text_from_pdf(pdf_file_path)
     print(text)
     save_text_to_file(text, output_file_path)
+
     print(f'Text extracted and saved to {output_file_path}')

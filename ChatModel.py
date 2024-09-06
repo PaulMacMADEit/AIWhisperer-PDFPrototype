@@ -5,12 +5,12 @@ from typing import Optional
 from pydantic import BaseModel
 from typing import Union
 from datetime import date
+from prompts import Structured_Prompt, Summarize_Prompt
 
 import modal 
 import csv
 
 app = modal.App(name="chat_model_app", image=modal.Image.debian_slim().pip_install("openai", "anthropic"))
-SystemPrompt = "Please reduce text to only the rooms and price. Be concise"
 
 # Context limits for different models
 CONTEXT_LIMITS = {
@@ -58,44 +58,35 @@ class RoomInfo(BaseModel):
 class TableOutput(BaseModel):
     rooms: List[RoomInfo]
 
-#Uses Structured output from OpenAI to produce table
-def AI_produce_table(extracted_text: str, model: str) -> Union[TableOutput, str]:
-    print(f"Processing text with {model}")
-    
-    with open("/root/output_prompt.txt", "r") as file:
-        system_prompt = file.read()
-    
-    if model == "OpenAI-GPT4":
-        print("Using OpenAI-GPT4")
-        prompt = system_prompt + "\n\n" + extracted_text
-        completion = OpenAI.remote(prompt, use_structured_output=True, output_schema=TableOutput)
-        return completion
-    return ""
 
-def extract_with_model(text: str, model: str, system_prompt: str = SystemPrompt) -> str:
-    print(f"Processing text with {model}")
+text_chunk = "Your text chunk here"
+custom_prompt = "You are a helpful assistant"
+
+def LLM_Model(text: str, model: str) -> str:
     extracted_text = ""
     
     if model == "OpenAI-GPT4":
-        print("Using OpenAI-GPT4")
         chunks = chunk_text(text, CONTEXT_LIMITS[model])
-
         for chunk in chunks:
-            prompt = SystemPrompt + "\n\n" + chunk
-            completion = OpenAI.remote(prompt)
+            completion = OpenAI.remote(Summarize_Prompt, chunk)
             extracted_text += completion
         
+    
     elif model == "Anthropic-Sonnet3.5":
         print("Using Anthropic-Sonnet3.5")
         chunks = chunk_text(text, CONTEXT_LIMITS[model])
         for chunk in chunks:
-            completion = Anthropic.remote(chunk, system_prompt)
+            completion = Anthropic.remote(chunk, Summarize_Prompt)
             print(completion)
             extracted_text += completion
     
+    elif model == "OpenAI_Structured":
+        print("Using OpenAI-GPT4 with structured output")
+        completion = OpenAI.remote(Structured_Prompt, text, use_structured_output=True, output_schema=TableOutput)
+        extracted_text = completion
+        
     elif model == "Google-Gemini1.5":
-        print("Google-Gemini1.5 not yet implemented")
-        return ""
+        print("Using Google-Gemini1.5")
     
     return extracted_text 
 
@@ -116,18 +107,20 @@ def chunk_text(text: str, chunk_size: int) -> List[str]:
     print("Number of chunks: " + str(len(chunks)))
     return chunks
 
-@app.function(secrets=[modal.Secret.from_name("OpenAI_API_Key")], container_idle_timeout=300, keep_warm=1)
-def OpenAI(prompt, use_structured_output=False, output_schema: Optional[type[BaseModel]] = None):
+@app.function(secrets=[modal.Secret.from_name("OpenAI_API_Key")], container_idle_timeout=300)
+def OpenAI(system_prompt: str, message_content: str, use_structured_output=False, output_schema: Optional[type[BaseModel]] = None):
     from openai import OpenAI
     import time
     client = OpenAI()
-    messages = [{"role": "user", "content": prompt}]
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": message_content}
+    ]
     start_time = time.time()
     
     if use_structured_output and output_schema:
         completion = client.beta.chat.completions.parse(
-            model="gpt-4o-mini-2024-07-18", #mini used for testing (faster). For production use gpt-4o
-            #model="gpt-4o", 
+            model="gpt-4o-2024-08-06",
             messages=messages,
             response_format=output_schema,
         )
@@ -135,8 +128,7 @@ def OpenAI(prompt, use_structured_output=False, output_schema: Optional[type[Bas
     else:
         chat_completion = client.chat.completions.create(
             messages=messages,
-            model="gpt-4o-mini-2024-07-18", #mini used for testing (faster). For production use gpt-4o
-            #model="gpt-4o",
+            model="gpt-4o-2024-08-06",
         )
         result = chat_completion.choices[0].message.content
     
@@ -146,7 +138,7 @@ def OpenAI(prompt, use_structured_output=False, output_schema: Optional[type[Bas
     
     return result
 
-@app.function(secrets=[modal.Secret.from_name("Anthropic-API")], container_idle_timeout=300, keep_warm=1)
+@app.function(secrets=[modal.Secret.from_name("Anthropic-API")], container_idle_timeout=300)
 def Anthropic(context, query):
     import anthropic
 
@@ -164,23 +156,26 @@ def main():
 
     test = False
     if test:
-        #Test OpenAI connection
+        #OpenAI
         prompt= "What is 1+1? Be very concise."
+        #completion = complete_text.remote(prompt)
         completion = OpenAI.remote(prompt)
         print("OpenAI: " + prompt + ": " + completion)
         
-        #Test Anthropic connection 
+        #Anthropic
         query = "What is 1+1?"
         context = "Be very concise."
         completion = Anthropic.remote(prompt, query)
         print("Anthropic: " + query + ": " + " ".join(completion))
     
-        #Test structured output completion
-        text = "The property is in NSW, it is 200 acres with rolling hills and a creek. Has a 2 queen bedroom, $165/night, extra toilets, and wifi via starlink"
-        result = extract_with_model(text, "OpenAI-GPT4", "Be concise. Tell me just the price")
-        table_result = OpenAI.remote(result, use_structured_output=True, output_schema=TableOutput)
-        print("Table Output: ", table_result)
-        save_to_csv(table_result)
+    text = "The property is in NSW, it is 200 acres with rolling hills and a creek. Has a 2 queen bedroom, $165/night, extra toilets, and wifi via starlink"
+    result = extract_with_model(text, "OpenAI-GPT4")
+    
+    table_result = OpenAI.remote(result, use_structured_output=True, output_schema=TableOutput)
+    #print("Table Output: ", table_result)
+
+    # Save the result to a CSV file
+    save_to_csv(table_result)
 
 def save_to_csv(table_output: TableOutput, filename: str = "room_info.csv"):
     with open(filename, mode='w', newline='', encoding='utf-8') as file:

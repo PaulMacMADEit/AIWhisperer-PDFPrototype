@@ -4,7 +4,7 @@ import fastapi.staticfiles
 import modal
 from ExtractPDF_Text import *
 from modal import Image
-from ChatModel import app as chat_model_app, extract_with_model, AI_produce_table
+from ChatModel import app as chat_model_app, LLM_Model
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -12,6 +12,8 @@ import csv
 import io
 from fastapi.responses import StreamingResponse
 import json
+from prompts import Structured_Prompt, Summarize_Prompt
+
 current_dir = Path(__file__).parent
 
 image = Image.debian_slim().pip_install("PyPDF2", "openai", "anthropic", "jinja2")
@@ -31,23 +33,19 @@ async def parse(request: fastapi.Request, container_idle_timeout=300, keep_warm=
     
     contents = await file.read()
     text = extract_text_from_pdf(contents)
+
+    print("Extracted Text: ", text[:100], "...\n")
     
-    print("Extracted Text: ", text[:100])
-    
-    # Save the full transcript to a file
     full_transcript_path = Path("full_transcripts") / f"{file.filename}.txt"
     full_transcript_path.parent.mkdir(exist_ok=True)
     with open(full_transcript_path, "w", encoding="utf-8") as f:
         f.write(text)
     
-    with open("/root/output_prompt.txt", "r") as prompt_file:
-        system_prompt = prompt_file.read()
+    print("Step 2: Condense Text. \n")
+    extracted_text = LLM_Model(text, "OpenAI-GPT4")
     
-    print("Step 2: Condense Text")
-    extracted_text = extract_with_model(text, "OpenAI-GPT4", system_prompt)
-    
-    print("Step 3: Produce Table")
-    table_result = AI_produce_table(extracted_text, "OpenAI-GPT4")
+    print("Step 3: Produce Table. \n")
+    table_result = LLM_Model(extracted_text, "OpenAI_Structured")
 
     # Convert table_result to a string representation
     table_result_str = str(table_result)
@@ -68,11 +66,8 @@ async def parse(request: fastapi.Request, container_idle_timeout=300, keep_warm=
         "table": table_result_dict,
     }
 
-
-
 @web_app.get("/result/{call_id}")
 async def poll_results(call_id: str):
-    #prints details
     print("call_id: ", call_id)
     result = "I am a test result"
     return result
@@ -94,7 +89,6 @@ def wrapper():
     )
     return web_app
 
-
 @web_app.get("/full_transcript/{filename}")
 async def get_full_transcript(filename: str):
     full_transcript_path = Path("full_transcripts") / f"{filename}.txt"
@@ -105,6 +99,7 @@ async def get_full_transcript(filename: str):
         full_text = f.read()
     
     return {"filename": filename, "text": full_text}
+
 
 @web_app.get("/download_csv/{filename}")
 async def download_csv(filename: str):
